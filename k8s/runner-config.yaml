@@ -7,7 +7,7 @@ spec:
   replicas: 1
   template:
     spec:
-      repository: rajeshkarunakaran/me-test  # Replace with your repo
+      repository: rajeshkarunakaran/demo-apps  # Replace with your repo
       labels:
         - kind-cluster
         - docker
@@ -50,4 +50,4 @@ spec:
   metrics:
   - type: TotalNumberOfQueuedAndInProgressWorkflowRuns
     repositoryNames:
-    - rajeshkarunakaran/me-test  # Replace with your repo
+    - rajeshkarunakaran/demo-apps  # Replace with your repo

@@ -11,7 +11,7 @@ metadata:
 type: Opaque
 stringData:
   token: "YOUR_GITHUB_TOKEN_HERE"
-  url: "https://github.com/rajeshfintech/me-test"
+  url: "https://github.com/rajeshfintech/demo-apps"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -39,7 +39,7 @@ spec:
               name: github-runner-token
               key: token
         - name: GITHUB_REPOSITORY
-          value: "rajeshfintech/me-test"
+          value: "rajeshfintech/demo-apps"
         - name: RUNNER_NAME
           value: "podman-kind-stable"
         - name: RUNNER_LABELS

@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # Configuration
-REPO="rajeshfintech/me-test"
+REPO="rajeshfintech/demo-apps"
 APP_NAME="flask-web"
 
 # Colors for output

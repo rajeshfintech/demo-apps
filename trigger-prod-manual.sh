@@ -4,7 +4,7 @@
 set -euo pipefail
 
 COMMIT_SHA="${1:-$(git rev-parse HEAD)}"
-REPO="rajeshfintech/me-test"
+REPO="rajeshfintech/demo-apps"
 
 echo "🚀 Triggering production deployment with manual approval..."
 echo "Repository: $REPO"
