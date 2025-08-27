@@ -13,6 +13,7 @@ permissions:
 jobs:
   build_and_publish:
     uses: rajeshfintech/demo-shared-actions/.github/workflows/reusable-build-and-publish.yml@main
+    secrets: inherit
     with:
       app_name: "flask-web"
       context: "."
