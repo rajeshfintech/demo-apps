@@ -1,0 +1,100 @@
+name: CI • Build Once & Deploy Dev
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  id-token: write
+  contents: read
+  packages: write
+
+jobs:
+  build_and_publish:
+    uses: rajeshfintech/shared-actions/.github/workflows/reusable-build-and-publish.yml@main
+    with:
+      app_name: "flask-web"
+      context: "."
+      dockerfile: "Dockerfile"
+      test_command: "PYTHONPATH=. pytest -q"
+      python_version: "3.11"
+      push_latest: ${{ github.ref == 'refs/heads/main' }}
+      run_trivy: false
+
+  deploy_dev:
+    needs: [build_and_publish]
+    uses: rajeshfintech/shared-actions/.github/workflows/reusable-deploy-k8s.yml@main
+    with:
+      aws_region: "${{ vars.AWS_REGION }}"
+      aws_role_to_assume: "${{ vars.AWS_ROLE_TO_ASSUME }}"
+      cluster_name: "${{ vars.EKS_DEV_CLUSTER }}"
+      generate_kubeconfig: true
+      namespace: "dev"
+      manifest_path: "k8s"
+      deployment: "flask-web"
+      container: "web"
+      image_ref: ${{ needs.build_and_publish.outputs.image }}
+      use_kustomize: false
+
+  summary:
+    needs: [build_and_publish, deploy_dev]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Generate Job Summary
+        run: |
+          # Extract SHA from image digest reference
+          IMAGE_REF="${{ needs.build_and_publish.outputs.image }}"
+          if [[ $IMAGE_REF == *"@sha256:"* ]]; then
+            IMAGE_SHA="${IMAGE_REF##*@}"
+            IMAGE_BASE="${IMAGE_REF%%@*}"
+          else
+            IMAGE_SHA="Not available"
+            IMAGE_BASE="${IMAGE_REF}"
+          fi
+          
+          echo "# 🚀 CI Build & Deploy Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📋 Build Metadata" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit SHA** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Short Hash** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Branch** | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Trigger** | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Actor** | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Workflow** | ${{ github.workflow }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Run Number** | #${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "## 🐳 Container Image" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image** | \`${IMAGE_BASE}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Tag** | \`${{ needs.build_and_publish.outputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image SHA** | \`${IMAGE_SHA}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Full Reference** | \`${{ needs.build_and_publish.outputs.image }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "## 🎯 Deployment Status" >> $GITHUB_STEP_SUMMARY
+          
+          # Build status
+          if [ "${{ needs.build_and_publish.result }}" == "success" ]; then
+            echo "- ✅ **Build & Publish**: Success" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ❌ **Build & Publish**: Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Deploy status
+          if [ "${{ needs.deploy_dev.result }}" == "success" ]; then
+            echo "- ✅ **Dev Deployment**: Success" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ❌ **Dev Deployment**: Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔗 Quick Links" >> $GITHUB_STEP_SUMMARY
+          echo "- [View Commit](https://github.com/${{ github.repository }}/commit/${{ github.sha }})" >> $GITHUB_STEP_SUMMARY
+          echo "- [Container Registry](https://github.com/${{ github.repository }}/pkgs/container/flask-web)" >> $GITHUB_STEP_SUMMARY
+          echo "- [Kubernetes Dashboard](https://your-k8s-dashboard-url)" >> $GITHUB_STEP_SUMMARY

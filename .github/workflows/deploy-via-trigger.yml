@@ -1,0 +1,74 @@
+name: Deploy via Trigger File
+
+on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: 'Deployment message'
+        required: false
+        default: 'Deployed via GitHub Actions'
+
+jobs:
+  create_deploy_trigger:
+    runs-on: [self-hosted, podman-kind]
+    
+    steps:
+    - name: Create deployment trigger
+      run: |
+        echo "🚀 Creating deployment trigger..."
+        echo "Message: ${{ github.event.inputs.message || 'Auto-deployment triggered' }}"
+        
+        # Create trigger file with deployment info
+        TRIGGER_FILE="/tmp/github-deploy-trigger"
+        
+        cat > "$TRIGGER_FILE" << EOF
+        # GitHub Actions Deployment Trigger
+        # Generated: $(date)
+        DEPLOY_TRIGGER=true
+        COMMIT_SHA=${{ github.sha }}
+        REPOSITORY=${{ github.repository }}
+        WORKFLOW=${{ github.workflow }}
+        RUN_ID=${{ github.run_id }}
+        ACTOR=${{ github.actor }}
+        MESSAGE="${{ github.event.inputs.message || 'Auto-deployment triggered' }}"
+        TIMESTAMP=$(date -Iseconds)
+        EOF
+        
+        echo "✅ Deployment trigger created!"
+        echo "📋 Trigger file location: $TRIGGER_FILE"
+        echo ""
+        echo "📄 Trigger file contents:"
+        cat "$TRIGGER_FILE"
+        
+    - name: Verify trigger file
+      run: |
+        echo "🔍 Verifying trigger file..."
+        TRIGGER_FILE="/tmp/github-deploy-trigger"
+        
+        if [ -f "$TRIGGER_FILE" ]; then
+          echo "✅ Trigger file exists"
+          echo "📊 File size: $(stat -c%s "$TRIGGER_FILE") bytes"
+          echo "🕐 File timestamp: $(stat -c%y "$TRIGGER_FILE")"
+        else
+          echo "❌ Trigger file not found!"
+          exit 1
+        fi
+        
+    - name: Instructions
+      run: |
+        echo ""
+        echo "📋 DEPLOYMENT INSTRUCTIONS"
+        echo "=========================="
+        echo ""
+        echo "The deployment trigger has been created successfully!"
+        echo ""
+        echo "To complete the deployment, run this command on your host system:"
+        echo ""
+        echo "  cd /Users/rajeshkarunakaran/Documents/IdeaProjects/me/me-test"
+        echo "  ./local-deploy-monitor.sh"
+        echo ""
+        echo "Or run the deployment directly:"
+        echo ""
+        echo "  ./deploy-podman-kind.sh"
+        echo ""
+        echo "The trigger file contains all the deployment metadata."

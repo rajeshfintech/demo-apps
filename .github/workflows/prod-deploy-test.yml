@@ -1,0 +1,172 @@
+name: CD • Production Deploy (Test)
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: "Commit SHA to promote to prod"
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+  packages: write
+
+jobs:
+  validate_and_compute_digest:
+    runs-on: ubuntu-latest
+    outputs:
+      image_digest_ref: ${{ steps.out.outputs.image_digest_ref }}
+      commit_sha: ${{ steps.validate.outputs.commit_sha }}
+      short_hash: ${{ steps.validate.outputs.short_hash }}
+    steps:
+      - name: Validate commit SHA
+        id: validate
+        run: |
+          COMMIT_SHA="${{ github.event.inputs.commit_sha }}"
+          SHORT_HASH="${COMMIT_SHA:0:8}"
+          
+          echo "🔍 Validating commit SHA: $COMMIT_SHA"
+          echo "📝 Short hash: $SHORT_HASH"
+          
+          # Validate SHA format (40 hex characters)
+          if [[ ! $COMMIT_SHA =~ ^[a-f0-9]{40}$ ]]; then
+            echo "❌ Invalid commit SHA format. Expected 40 hex characters."
+            exit 1
+          fi
+          
+          echo "commit_sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+          echo "short_hash=$SHORT_HASH" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve image and digest
+        id: out
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          APP="flask-web"
+          IMAGE="ghcr.io/${OWNER}/${APP}"
+          TAG="sha-${{ steps.validate.outputs.commit_sha }}"
+          
+          echo "🔍 Looking for image: ${IMAGE}:${TAG}"
+          
+          # Install required tools
+          sudo apt-get update -y && sudo apt-get install -y skopeo jq
+          
+          # Get the digest
+          if DIGEST=$(skopeo inspect --creds "${OWNER}:${{ secrets.GITHUB_TOKEN }}" "docker://${IMAGE}:${TAG}" | jq -r .Digest); then
+            if [ "$DIGEST" != "null" ] && [ -n "$DIGEST" ]; then
+              echo "✅ Found image with digest: ${DIGEST}"
+              echo "image_digest_ref=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
+            else
+              echo "❌ Invalid digest received: ${DIGEST}"
+              exit 1
+            fi
+          else
+            echo "❌ Failed to inspect image: ${IMAGE}:${TAG}"
+            echo "💡 Make sure the commit has been built and pushed to the registry"
+            exit 1
+          fi
+
+  promote_to_prod:
+    needs: validate_and_compute_digest
+    uses: rajeshfintech/shared-actions/.github/workflows/reusable-promote-image.yml@main
+    with:
+      image_digest_ref: ${{ needs.validate_and_compute_digest.outputs.image_digest_ref }}
+      promote_to: "prod"
+
+  deploy_prod:
+    needs: [validate_and_compute_digest, promote_to_prod]
+    uses: rajeshfintech/shared-actions/.github/workflows/reusable-deploy-k8s.yml@main
+    with:
+      aws_region: "${{ vars.AWS_REGION }}"
+      aws_role_to_assume: "${{ vars.AWS_ROLE_TO_ASSUME }}"
+      cluster_name: "${{ vars.EKS_PROD_CLUSTER }}"
+      generate_kubeconfig: true
+      namespace: "prod"
+      manifest_path: "k8s"
+      deployment: "flask-web"
+      container: "web"
+      image_ref: ${{ needs.validate_and_compute_digest.outputs.image_digest_ref }}
+      use_kustomize: false
+
+  summary:
+    needs: [validate_and_compute_digest, promote_to_prod, deploy_prod]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Generate Job Summary
+        run: |
+          # Extract SHA from image digest reference
+          IMAGE_REF="${{ needs.validate_and_compute_digest.outputs.image_digest_ref }}"
+          if [[ $IMAGE_REF == *"@sha256:"* ]]; then
+            IMAGE_SHA="${IMAGE_REF##*@}"
+            IMAGE_BASE="${IMAGE_REF%%@*}"
+          else
+            IMAGE_SHA="Not available"
+            IMAGE_BASE="${IMAGE_REF}"
+          fi
+          
+          echo "# 🧪 Production Deploy Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📋 Build Metadata" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit SHA** | \`${{ needs.validate_and_compute_digest.outputs.commit_sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Short Hash** | \`${{ needs.validate_and_compute_digest.outputs.short_hash }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Environment** | Production (Test) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Trigger** | Manual (No Approval) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Requested By** | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Workflow** | ${{ github.workflow }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Run Number** | #${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "## 🐳 Container Image" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image Base** | \`${IMAGE_BASE}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Source Tag** | \`sha-${{ needs.validate_and_compute_digest.outputs.commit_sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Promoted To** | \`prod\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image SHA** | \`${IMAGE_SHA}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Full Reference** | \`${{ needs.validate_and_compute_digest.outputs.image_digest_ref }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "## 🎯 Deployment Status" >> $GITHUB_STEP_SUMMARY
+          
+          # Validation status
+          if [ "${{ needs.validate_and_compute_digest.result }}" == "success" ]; then
+            echo "- ✅ **Validation & Digest**: Success" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ❌ **Validation & Digest**: Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Promote status
+          if [ "${{ needs.promote_to_prod.result }}" == "success" ]; then
+            echo "- ✅ **Image Promotion**: Success" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ❌ **Image Promotion**: Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Deploy status
+          if [ "${{ needs.deploy_prod.result }}" == "success" ]; then
+            echo "- ✅ **Production Deployment**: Success" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ❌ **Production Deployment**: Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔗 Quick Links" >> $GITHUB_STEP_SUMMARY
+          echo "- [View Commit](https://github.com/${{ github.repository }}/commit/${{ needs.validate_and_compute_digest.outputs.commit_sha }})" >> $GITHUB_STEP_SUMMARY
+          echo "- [Container Registry](https://github.com/${{ github.repository }}/pkgs/container/flask-web)" >> $GITHUB_STEP_SUMMARY
+          echo "- [Production Environment](https://your-prod-url)" >> $GITHUB_STEP_SUMMARY
+          
+          # Add final status
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.deploy_prod.result }}" == "success" ]; then
+            echo "## 🎉 Test Deployment Complete!" >> $GITHUB_STEP_SUMMARY
+            echo "Production environment is now running commit \`${{ needs.validate_and_compute_digest.outputs.short_hash }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "**Image SHA**: \`${IMAGE_SHA}\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ **Note**: This was a test deployment without approval gates." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ⚠️ Test Deployment Failed" >> $GITHUB_STEP_SUMMARY
+            echo "Check the logs above for details on what went wrong." >> $GITHUB_STEP_SUMMARY
+          fi
