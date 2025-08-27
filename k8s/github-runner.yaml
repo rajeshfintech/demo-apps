@@ -11,7 +11,7 @@ metadata:
 type: Opaque
 stringData:
   token: "YOUR_GITHUB_TOKEN_HERE"  # Replace with your GitHub token
-  url: "https://github.com/rajeshkarunakaran/me-test"  # Replace with your repo URL
+  url: "https://github.com/rajeshkarunakaran/demo-apps"  # Replace with your repo URL
 ---
 apiVersion: apps/v1
 kind: Deployment

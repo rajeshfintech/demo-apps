@@ -11,7 +11,7 @@ metadata:
 type: Opaque
 stringData:
   token: "YOUR_GITHUB_TOKEN_HERE"  # This will be updated by the script
-  url: "https://github.com/rajeshfintech/me-test"
+  url: "https://github.com/rajeshfintech/demo-apps"
 ---
 apiVersion: apps/v1
 kind: Deployment

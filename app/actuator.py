@@ -106,7 +106,7 @@ class FlaskActuator:
                 "artifact": os.getenv('APP_NAME', 'flask-web'),
                 "name": os.getenv('APP_NAME', 'flask-web'),
                 "time": os.getenv('BUILD_TIME', datetime.now().isoformat()),
-                "group": "me-test"
+                "group": "demo-apps"
             },
             "git": {
                 "branch": os.getenv('GIT_BRANCH', 'unknown'),

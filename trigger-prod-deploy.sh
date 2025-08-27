@@ -26,7 +26,7 @@ fi
 
 COMMIT_SHA="${1:-$(git rev-parse HEAD)}"
 SHORT_HASH=$(git rev-parse --short "$COMMIT_SHA")
-REPO="rajeshfintech/me-test"
+REPO="rajeshfintech/demo-apps"
 
 echo "Production Deployment"
 echo "Repository: $REPO"
