@@ -1,0 +1,192 @@
+#!/bin/bash
+
+# Script to trigger production deployment with manual approval
+# Only uses approved workflows for production safety
+set -euo pipefail
+
+# Check dependencies
+if ! command -v jq &> /dev/null; then
+    echo "❌ jq is required but not installed. Please install jq first."
+    echo "💡 Install with: brew install jq (macOS) or apt-get install jq (Ubuntu)"
+    exit 1
+fi
+
+if ! command -v gh &> /dev/null; then
+    echo "❌ GitHub CLI (gh) is required but not installed."
+    echo "💡 Install from: https://cli.github.com/"
+    exit 1
+fi
+
+COMMIT_SHA="${1:-$(git rev-parse HEAD)}"
+SHORT_HASH=$(git rev-parse --short "$COMMIT_SHA")
+REPO="rajeshfintech/me-test"
+
+echo "🚀 Production Deployment"
+echo "Repository: $REPO"
+echo "Commit SHA: $COMMIT_SHA"
+echo "Short hash: $SHORT_HASH"
+echo ""
+
+echo "🔒 Production deployment requires manual approval for safety."
+echo ""
+echo "Available options:"
+echo "1) Manual approval workflow (recommended - requires human approval)"
+echo "2) Promote existing image (also requires manual approval for production)"
+echo ""
+read -p "Select option (1 or 2): " -n 1 -r
+echo
+
+case $REPLY in
+    1)
+        echo ""
+        echo "🔧 Triggering manual approval workflow..."
+        
+        # Check if the commit has a corresponding container image
+        echo "📦 Checking if container image exists for commit $COMMIT_SHA..."
+        IMAGE_TAG="sha-$COMMIT_SHA"
+        IMAGE_NAME="ghcr.io/rajeshfintech/flask-web:$IMAGE_TAG"
+
+        # Use GitHub CLI to trigger the workflow
+        gh workflow run "CD • Production (manual approval)" \
+          --repo "$REPO" \
+          --field commit_sha="$COMMIT_SHA"
+
+        echo ""
+        echo "✅ Manual approval workflow triggered!"
+        echo ""
+        echo "📋 Next steps:"
+        echo "1. Go to: https://github.com/$REPO/actions"
+        echo "2. Find the 'CD • Production (manual approval)' workflow run"
+        echo "3. The workflow will create an approval issue"
+        echo "4. Approve the deployment in the issue"
+        echo "5. The deployment will proceed to production"
+        ;;
+    2)
+        echo ""
+        echo "🔄 Promoting existing image with approval..."
+        echo "📦 Fetching available images from GHCR..."
+        
+        # Function to get available commit hashes from GHCR
+        get_available_commits() {
+            local package_name="flask-web"
+            local org="rajeshfintech"
+            
+            # Get package versions using GitHub API
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "/orgs/$org/packages/container/$package_name/versions" \
+              --paginate \
+              --jq '.[] | select(.metadata.container.tags[] | startswith("sha-")) | {created_at, tags: .metadata.container.tags}' 2>/dev/null || {
+                echo "❌ Failed to fetch images from GHCR. Make sure you have access to the repository."
+                echo "💡 Falling back to current commit: $COMMIT_SHA"
+                return 1
+            }
+        }
+        
+        # Get and parse available commits
+        echo "🔍 Searching for available commit images..."
+        temp_file=$(mktemp)
+        
+        if get_available_commits > "$temp_file"; then
+            # Extract commit hashes and sort by creation date (newest first)
+            available_commits=$(jq -r '.tags[] | select(startswith("sha-")) | sub("sha-"; "")' "$temp_file" | \
+                while read -r commit; do
+                    created_at=$(jq -r --arg commit "sha-$commit" 'select(.tags[] == $commit) | .created_at' "$temp_file")
+                    echo "$created_at $commit"
+                done | sort -r | cut -d' ' -f2 | head -20)
+            
+            if [ -z "$available_commits" ]; then
+                echo "❌ No commit-based images found in GHCR."
+                echo "💡 Using current commit: $COMMIT_SHA"
+                selected_commit="$COMMIT_SHA"
+            else
+                echo ""
+                echo "📋 Available commits (newest first):"
+                echo ""
+                
+                # Create numbered list
+                commit_array=()
+                i=1
+                while IFS= read -r commit; do
+                    if [ -n "$commit" ]; then
+                        commit_array+=("$commit")
+                        short_commit=$(echo "$commit" | cut -c1-8)
+                        
+                        # Try to get commit message if possible
+                        commit_msg=$(git log --oneline -1 "$commit" 2>/dev/null | cut -d' ' -f2- || echo "")
+                        if [ -n "$commit_msg" ]; then
+                            echo "$i) $short_commit - $commit_msg"
+                        else
+                            echo "$i) $short_commit"
+                        fi
+                        ((i++))
+                    fi
+                done <<< "$available_commits"
+                
+                echo ""
+                echo "0) Use current commit ($SHORT_HASH)"
+                echo ""
+                
+                # Get user selection
+                while true; do
+                    read -p "Select commit (0-$((${#commit_array[@]}))): " selection
+                    
+                    if [[ "$selection" =~ ^[0-9]+$ ]]; then
+                        if [ "$selection" -eq 0 ]; then
+                            selected_commit="$COMMIT_SHA"
+                            echo "✅ Selected current commit: $SHORT_HASH"
+                            break
+                        elif [ "$selection" -ge 1 ] && [ "$selection" -le "${#commit_array[@]}" ]; then
+                            selected_commit="${commit_array[$((selection-1))]}"
+                            selected_short=$(echo "$selected_commit" | cut -c1-8)
+                            echo "✅ Selected commit: $selected_short"
+                            break
+                        else
+                            echo "❌ Invalid selection. Please choose 0-$((${#commit_array[@]}))"
+                        fi
+                    else
+                        echo "❌ Please enter a number."
+                    fi
+                done
+            fi
+        else
+            echo "⚠️  Could not fetch available images. Using current commit."
+            selected_commit="$COMMIT_SHA"
+        fi
+        
+        rm -f "$temp_file"
+        
+        echo ""
+        echo "🔄 Promoting image for commit: $(echo "$selected_commit" | cut -c1-8)"
+        
+        # Use manual approval workflow with selected commit
+        gh workflow run "CD • Production (manual approval)" \
+          --repo "$REPO" \
+          --field commit_sha="$selected_commit"
+
+        echo ""
+        echo "✅ Production approval workflow triggered for image promotion!"
+        echo ""
+        echo "📋 Next steps:"
+        echo "1. Go to: https://github.com/$REPO/actions"
+        echo "2. Find the 'CD • Production (manual approval)' workflow run"
+        echo "3. The workflow will create an approval issue"
+        echo "4. Approve the deployment in the issue"
+        echo "5. The selected image will be deployed to production"
+        echo ""
+        echo "🔍 Selected image: ghcr.io/rajeshfintech/flask-web:sha-$(echo "$selected_commit" | cut -c1-8)"
+        ;;
+    *)
+        echo "❌ Invalid option. Exiting."
+        exit 1
+        ;;
+esac
+
+echo ""
+if [ "$REPLY" = "2" ] && [ -n "${selected_commit:-}" ]; then
+    echo "🔍 Selected image: ghcr.io/rajeshfintech/flask-web:sha-$(echo "$selected_commit" | cut -c1-8)"
+else
+    echo "🔍 Expected image: ghcr.io/rajeshfintech/flask-web:sha-$COMMIT_SHA"
+fi
+echo "🔗 Monitor at: https://github.com/$REPO/actions"

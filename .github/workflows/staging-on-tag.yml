@@ -1,0 +1,67 @@
+name: CD • On-Demand Staging (tag or manual)
+
+on:
+  push:
+    tags:
+      - "staging-*"
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: "Commit SHA to promote to staging (optional if pushing tag staging-*)"
+        required: false
+      image_digest_ref:
+        description: "Full image digest ref (ghcr.io/rajeshfintech/app@sha256:...) to deploy directly"
+        required: false
+
+permissions:
+  id-token: write
+  contents: read
+  packages: write
+
+jobs:
+  resolve_inputs:
+    runs-on: ubuntu-latest
+    outputs:
+      image_digest_ref: ${{ steps.out.outputs.image_digest_ref }}
+    steps:
+      - name: Resolve digest from inputs or tag
+        id: out
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          APP="flask-web"
+          IMAGE="ghcr.io/${OWNER}/${APP}"
+          if [ -n "${{ github.event.inputs.image_digest_ref || '' }}" ]; then
+            echo "image_digest_ref=${{ github.event.inputs.image_digest_ref }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -n "${{ github.event.inputs.commit_sha || '' }}" ]; then
+            SHA="${{ github.event.inputs.commit_sha }}"
+          else
+            SHA="${{ github.sha }}"
+          fi
+          TAG="sha-${SHA}"
+          sudo apt-get update -y && sudo apt-get install -y skopeo jq
+          DIGEST=$(skopeo inspect --creds "${OWNER}:${{ secrets.GITHUB_TOKEN }}" "docker://${IMAGE}:${TAG}" | jq -r .Digest)
+          echo "image_digest_ref=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
+
+  promote_to_staging:
+    needs: resolve_inputs
+    uses: rajeshfintech/demo-shared-actions/.github/workflows/reusable-promote-image.yml@main
+    with:
+      image_digest_ref: ${{ needs.resolve_inputs.outputs.image_digest_ref }}
+      promote_to: "staging"
+
+  deploy_staging:
+    needs: promote_to_staging
+    uses: rajeshfintech/demo-shared-actions/.github/workflows/reusable-deploy-k8s.yml@main
+    with:
+      aws_region: "${{ vars.AWS_REGION }}"
+      aws_role_to_assume: "${{ vars.AWS_ROLE_TO_ASSUME }}"
+      cluster_name: "${{ vars.EKS_STAGING_CLUSTER }}"
+      generate_kubeconfig: true
+      namespace: "staging"
+      manifest_path: "k8s"
+      deployment: "flask-web"
+      container: "web"
+      image_ref: ${{ needs.resolve_inputs.outputs.image_digest_ref }}
+      use_kustomize: false

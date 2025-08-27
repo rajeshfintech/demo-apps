@@ -1,0 +1,149 @@
+name: CD • Auto Promote & Deploy Staging (on main)
+
+on:
+  workflow_run:
+    workflows: ["CI • Build Once & Deploy Dev"]
+    types:
+      - completed
+    branches: ["main"]
+
+permissions:
+  id-token: write
+  contents: read
+  packages: write
+  actions: read  
+
+jobs:
+  check_build_success:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    outputs:
+      commit_sha: ${{ steps.get_sha.outputs.commit_sha }}
+    steps:
+      - name: Get commit SHA from workflow run
+        id: get_sha
+        run: |
+          echo "commit_sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+          echo "✅ Build workflow completed successfully for commit: ${{ github.event.workflow_run.head_sha }}"
+
+  get_image_digest:
+    needs: check_build_success
+    runs-on: ubuntu-latest
+    outputs:
+      image_digest_ref: ${{ steps.digest.outputs.image_digest_ref }}
+    steps:
+      - name: Get image digest from successful build
+        id: digest
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          APP="flask-web"
+          IMAGE="ghcr.io/${OWNER}/${APP}"
+          TAG="sha-${{ needs.check_build_success.outputs.commit_sha }}"
+          
+          echo "🔍 Getting digest for image: ${IMAGE}:${TAG}"
+          
+          # Install required tools
+          sudo apt-get update -y && sudo apt-get install -y skopeo jq
+          
+          # Get the digest (image should exist since build completed successfully)
+          if DIGEST=$(skopeo inspect --creds "${OWNER}:${{ secrets.GITHUB_TOKEN }}" "docker://${IMAGE}:${TAG}" | jq -r .Digest); then
+            if [ "$DIGEST" != "null" ] && [ -n "$DIGEST" ]; then
+              echo "✅ Found image with digest: ${DIGEST}"
+              echo "image_digest_ref=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
+            else
+              echo "❌ Invalid digest received: ${DIGEST}"
+              exit 1
+            fi
+          else
+            echo "❌ Failed to inspect image: ${IMAGE}:${TAG}"
+            exit 1
+          fi
+
+  promote_to_staging:
+    needs: get_image_digest
+    uses: rajeshfintech/demo-shared-actions/.github/workflows/reusable-promote-image.yml@main
+    with:
+      image_digest_ref: ${{ needs.get_image_digest.outputs.image_digest_ref }}
+      promote_to: "staging"
+
+  deploy_staging:
+    needs: [get_image_digest, promote_to_staging]
+    uses: rajeshfintech/demo-shared-actions/.github/workflows/reusable-deploy-k8s.yml@main
+    with:
+      aws_region: "${{ vars.AWS_REGION }}"
+      aws_role_to_assume: "${{ vars.AWS_ROLE_TO_ASSUME }}"
+      cluster_name: "${{ vars.EKS_STAGING_CLUSTER }}"
+      generate_kubeconfig: true
+      namespace: "staging"
+      manifest_path: "k8s"
+      deployment: "flask-web"
+      container: "web"
+      image_ref: ${{ needs.get_image_digest.outputs.image_digest_ref }}
+      use_kustomize: false
+
+  summary:
+    needs: [check_build_success, get_image_digest, promote_to_staging, deploy_staging]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Generate Job Summary
+        run: |
+          SHORT_HASH="${{ needs.check_build_success.outputs.commit_sha }}"
+          SHORT_HASH="${SHORT_HASH:0:8}"
+          
+          # Extract SHA from image digest reference
+          IMAGE_REF="${{ needs.get_image_digest.outputs.image_digest_ref }}"
+          if [[ $IMAGE_REF == *"@sha256:"* ]]; then
+            IMAGE_SHA="${IMAGE_REF##*@}"
+            IMAGE_BASE="${IMAGE_REF%%@*}"
+          else
+            IMAGE_SHA="Not available"
+            IMAGE_BASE="${IMAGE_REF}"
+          fi
+          
+          echo "# 🎯 Staging Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📋 Build Metadata" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit SHA** | \`${{ needs.check_build_success.outputs.commit_sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Short Hash** | \`${SHORT_HASH}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Branch** | \`main\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Trigger** | Workflow Run (CI Success) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Environment** | Staging |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Workflow** | ${{ github.workflow }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Run Number** | #${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "## 🐳 Container Image" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image Base** | \`${IMAGE_BASE}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Source Tag** | \`sha-${{ needs.check_build_success.outputs.commit_sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Promoted To** | \`staging\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image SHA** | \`${IMAGE_SHA}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Full Reference** | \`${{ needs.get_image_digest.outputs.image_digest_ref }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "## 🎯 Deployment Status" >> $GITHUB_STEP_SUMMARY
+          
+          # Promote status
+          if [ "${{ needs.promote_to_staging.result }}" == "success" ]; then
+            echo "- ✅ **Image Promotion**: Success" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ❌ **Image Promotion**: Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Deploy status
+          if [ "${{ needs.deploy_staging.result }}" == "success" ]; then
+            echo "- ✅ **Staging Deployment**: Success" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ❌ **Staging Deployment**: Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔗 Quick Links" >> $GITHUB_STEP_SUMMARY
+          echo "- [View Commit](https://github.com/${{ github.repository }}/commit/${{ needs.check_build_success.outputs.commit_sha }})" >> $GITHUB_STEP_SUMMARY
+          echo "- [Container Registry](https://github.com/${{ github.repository }}/pkgs/container/flask-web)" >> $GITHUB_STEP_SUMMARY
+          echo "- [Staging Environment](https://your-staging-url)" >> $GITHUB_STEP_SUMMARY
+          echo "- [Source CI Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }})" >> $GITHUB_STEP_SUMMARY

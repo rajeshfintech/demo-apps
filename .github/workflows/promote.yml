@@ -1,0 +1,51 @@
+name: CD • Promote Image (No Rebuild)
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: "Commit SHA to promote (must exist in GHCR as sha-<sha>)"
+        required: true
+      to_env:
+        description: "Target environment tag: dev,staging,prod (or comma-separated)"
+        required: true
+        default: "staging"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  compute_digest:
+    runs-on: ubuntu-latest
+    outputs:
+      image_digest_ref: ${{ steps.out.outputs.image_digest_ref }}
+    steps:
+      - name: Resolve image and digest
+        id: out
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          APP="flask-web"
+          IMAGE="ghcr.io/${OWNER}/${APP}"
+          SHA_TAG="sha-${{ github.event.inputs.commit_sha }}"
+          echo "Looking up digest for $IMAGE:$SHA_TAG"
+          sudo apt-get update -y && sudo apt-get install -y golang-go
+          go install github.com/google/go-containerregistry/cmd/crane@latest
+          DIGEST=$("$HOME/go/bin/crane" digest "$IMAGE:$SHA_TAG")
+          echo "image_digest_ref=$IMAGE@$DIGEST" >> "$GITHUB_OUTPUT"
+
+  promote:
+    needs: compute_digest
+    uses: rajeshfintech/demo-shared-actions/.github/workflows/reusable-promote-image.yml@main
+    with:
+      image_digest_ref: ${{ needs.compute_digest.outputs.image_digest_ref }}
+      promote_to: ${{ github.event.inputs.to_env }}
+
+  # Hook: trigger env-specific deploy after promotion (add jobs similar to dev)
+  deploy_after_promote:
+    if: contains(github.event.inputs.to_env, 'staging') || contains(github.event.inputs.to_env, 'prod')
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "Promoted to ${{ github.event.inputs.to_env }}."
+          echo "Add staging/prod deploy calls here using the reusable deploy workflow."
