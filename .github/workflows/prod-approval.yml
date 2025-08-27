@@ -122,14 +122,14 @@ jobs:
 
   promote_to_prod:
     needs: compute_digest
-    uses: rajeshfintech/shared-actions/.github/workflows/reusable-promote-image.yml@main
+    uses: rajeshfintech/demo-shared-actions/.github/workflows/reusable-promote-image.yml@main
     with:
       image_digest_ref: ${{ needs.compute_digest.outputs.image_digest_ref }}
       promote_to: "prod"
 
   deploy_prod:
     needs: [validate_input, compute_digest, promote_to_prod]
-    uses: rajeshfintech/shared-actions/.github/workflows/reusable-deploy-k8s.yml@main
+    uses: rajeshfintech/demo-shared-actions/.github/workflows/reusable-deploy-k8s.yml@main
     with:
       aws_region: "${{ vars.AWS_REGION }}"
       aws_role_to_assume: "${{ vars.AWS_ROLE_TO_ASSUME }}"

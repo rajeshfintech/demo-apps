@@ -36,7 +36,7 @@ jobs:
 
   promote:
     needs: compute_digest
-    uses: rajeshfintech/shared-actions/.github/workflows/reusable-promote-image.yml@main
+    uses: rajeshfintech/demo-shared-actions/.github/workflows/reusable-promote-image.yml@main
     with:
       image_digest_ref: ${{ needs.compute_digest.outputs.image_digest_ref }}
       promote_to: ${{ github.event.inputs.to_env }}

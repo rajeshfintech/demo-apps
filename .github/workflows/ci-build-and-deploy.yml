@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build_and_publish:
-    uses: rajeshfintech/shared-actions/.github/workflows/reusable-build-and-publish.yml@main
+    uses: rajeshfintech/demo-shared-actions/.github/workflows/reusable-build-and-publish.yml@main
     with:
       app_name: "flask-web"
       context: "."
@@ -24,7 +24,7 @@ jobs:
 
   deploy_dev:
     needs: [build_and_publish]
-    uses: rajeshfintech/shared-actions/.github/workflows/reusable-deploy-k8s.yml@main
+    uses: rajeshfintech/demo-shared-actions/.github/workflows/reusable-deploy-k8s.yml@main
     with:
       aws_region: "${{ vars.AWS_REGION }}"
       aws_role_to_assume: "${{ vars.AWS_ROLE_TO_ASSUME }}"
