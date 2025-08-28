@@ -2,7 +2,7 @@
 
 # Local deployment script using Podman
 # This script builds and runs the Flask application locally
-
+# It supports cleaning up existing images and running tests after deployment
 set -euo pipefail
 
 # Configuration
